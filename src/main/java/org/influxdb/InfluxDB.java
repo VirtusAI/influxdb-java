@@ -1,6 +1,7 @@
 package org.influxdb;
 
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -239,6 +240,81 @@ public interface InfluxDB {
    * @return a List of Series which matched the query.
    */
   public QueryResult query(final Query query, TimeUnit timeUnit);
+
+  /**
+   * Write a single Point to the database asynchronously.
+   *
+   * @param database
+   *            the database to write to.
+   * @param retentionPolicy
+   *            the retentionPolicy to use.
+   * @param point
+   *            The point to write.
+   * @return CompletionStage
+   */
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy, final Point point);
+
+  /**
+   * Write a set of Points to the influxdb database asynchronously with the new (>= 0.9.0rc32) lineprotocol.
+   *
+   * {@linkplain "https://github.com/influxdb/influxdb/pull/2696"}
+   *
+   * @param batchPoints
+   * @return CompletionStage
+   */
+  public CompletionStage<Void> writeAsync(final BatchPoints batchPoints);
+
+  /**
+   * Write a set of Points to the influxdb database asynchronously with the string records.
+   *
+   * {@linkplain "https://github.com/influxdb/influxdb/pull/2696"}
+   *
+   * @param records
+   * @return CompletionStage
+   */
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy,
+                    final ConsistencyLevel consistency, final String records);
+
+  /**
+   * Write a set of Points to the influxdb database asynchronously with the list of string records.
+   *
+   * {@linkplain "https://github.com/influxdb/influxdb/pull/2696"}
+   *
+   * @param records
+   * @return CompletionStage
+   */
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy,
+                    final ConsistencyLevel consistency, final List<String> records);
+
+  /**
+   * Execute a query against a database asynchronously.
+   *
+   * @param query
+   *            the query to execute.
+   * @return CompletionStage completed with a List of Series which matched the query.
+   */
+  public CompletionStage<QueryResult> queryAsync(final Query query);
+
+  /**
+   * Execute a streaming query against a database asynchronously.
+   *
+   * @param query
+   *            the query to execute.
+   * @param chunkSize
+   *            the number of QueryResults to process in one chunk.
+   * @return CompletionStage
+   */
+    public CompletionStage<QueryResult> queryAsync(Query query, int chunkSize);
+
+  /**
+   * Execute a query against a database asynchronously.
+   *
+   * @param query
+   *            the query to execute.
+   * @param timeUnit the time unit of the results.
+   * @return CompletionStage completed with a List of Series which matched the query.
+   */
+  public CompletionStage<QueryResult> queryAsync(final Query query, TimeUnit timeUnit);
 
   /**
    * Create a new Database.

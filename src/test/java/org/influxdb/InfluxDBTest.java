@@ -601,5 +601,131 @@ public class InfluxDBTest {
             });
         }
     }
+    
+    /**
+	 * Simple Test for an asynchronous query.
+	 */
+	@Test
+	public void testQueryAsync() {
+		this.influxDB.queryAsync(new Query("CREATE DATABASE mydb2", "mydb")).whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+		});
+		this.influxDB.queryAsync(new Query("DROP DATABASE mydb2", "mydb")).whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+		});
+	}
 
+    /**
+	 * Test that writing asynchronously to the new lineprotocol.
+	 */
+	@Test
+	public void testWriteAsync() {
+		String dbName = "write_unittest_" + System.currentTimeMillis();
+		this.influxDB.createDatabase(dbName);
+		String rp = TestUtils.defaultRetentionPolicy(this.influxDB.version());
+		BatchPoints batchPoints = BatchPoints.database(dbName).tag("async", "true").retentionPolicy(rp).build();
+		Point point1 = Point
+				.measurement("cpu")
+				.tag("atag", "test")
+				.addField("idle", 90L)
+				.addField("usertime", 9L)
+				.addField("system", 1L)
+				.build();
+		Point point2 = Point.measurement("disk").tag("atag", "test").addField("used", 80L).addField("free", 1L).build();
+		batchPoints.point(point1);
+		batchPoints.point(point2);
+		this.influxDB.writeAsync(batchPoints).whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+			else {
+				Query query = new Query("SELECT * FROM cpu GROUP BY *", dbName);
+				QueryResult result = this.influxDB.query(query);
+				Assert.assertFalse(result.getResults().get(0).getSeries().get(0).getTags().isEmpty());
+				this.influxDB.deleteDatabase(dbName);
+			}
+		});
+	}
+	
+
+    /**
+     * Test writing asynchronously to the database using string protocol.
+     */
+    @Test
+    public void testWriteStringDataAsync() {
+        String dbName = "write_unittest_" + System.currentTimeMillis();
+        this.influxDB.createDatabase(dbName);
+        String rp = TestUtils.defaultRetentionPolicy(this.influxDB.version());
+        this.influxDB.writeAsync(dbName, rp, InfluxDB.ConsistencyLevel.ONE, "cpu,atag=test idle=90,usertime=9,system=1").whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+			else {
+				Query query = new Query("SELECT * FROM cpu GROUP BY *", dbName);
+	            QueryResult result = this.influxDB.query(query);
+	            Assert.assertFalse(result.getResults().get(0).getSeries().get(0).getTags().isEmpty());
+	            this.influxDB.deleteDatabase(dbName);
+			}
+        });
+    }
+
+    /**
+     * Test writing multiple records asynchronously to the database using string protocol.
+     */
+    @Test
+    public void testWriteMultipleStringDataAsync() {
+        String dbName = "write_unittest_" + System.currentTimeMillis();
+        this.influxDB.createDatabase(dbName);
+        String rp = TestUtils.defaultRetentionPolicy(this.influxDB.version());
+
+        this.influxDB.writeAsync(dbName, rp, InfluxDB.ConsistencyLevel.ONE, "cpu,atag=test1 idle=100,usertime=10,system=1\ncpu,atag=test2 idle=200,usertime=20,system=2\ncpu,atag=test3 idle=300,usertime=30,system=3").whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+			else {
+	        	Query query = new Query("SELECT * FROM cpu GROUP BY *", dbName);
+	            QueryResult result = this.influxDB.query(query);
+	
+	            Assert.assertEquals(result.getResults().get(0).getSeries().size(), 3);
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(0).getTags().get("atag"), "test1");
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(1).getTags().get("atag"), "test2");
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(2).getTags().get("atag"), "test3");
+	            this.influxDB.deleteDatabase(dbName);
+			}
+        });
+    }
+
+    /**
+     * Test writing multiple separate records asynchronously to the database using string protocol.
+     */
+    @Test
+    public void testWriteMultipleStringDataLinesAsync() {
+        String dbName = "write_unittest_" + System.currentTimeMillis();
+        this.influxDB.createDatabase(dbName);
+        String rp = TestUtils.defaultRetentionPolicy(this.influxDB.version());
+
+        this.influxDB.writeAsync(dbName, rp, InfluxDB.ConsistencyLevel.ONE, Arrays.asList(
+                "cpu,atag=test1 idle=100,usertime=10,system=1",
+                "cpu,atag=test2 idle=200,usertime=20,system=2",
+                "cpu,atag=test3 idle=300,usertime=30,system=3"
+        )).whenComplete((res, t) -> {
+			if(t != null) {
+				Assert.fail(t.getMessage());
+			}
+			else {
+	        	Query query = new Query("SELECT * FROM cpu GROUP BY *", dbName);
+	            QueryResult result = this.influxDB.query(query);
+	
+	            Assert.assertEquals(result.getResults().get(0).getSeries().size(), 3);
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(0).getTags().get("atag"), "test1");
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(1).getTags().get("atag"), "test2");
+	            Assert.assertEquals(result.getResults().get(0).getSeries().get(2).getTags().get("atag"), "test3");
+	            this.influxDB.deleteDatabase(dbName);
+			}
+        });
+    }
 }

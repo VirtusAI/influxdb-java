@@ -42,6 +42,8 @@ import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -389,6 +391,136 @@ public class InfluxDBImpl implements InfluxDB {
         TimeUtil.toTimePrecision(timeUnit), query.getCommandWithUrlEncoded()));
   }
 
+  @Override
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy, final Point point) {
+    if (this.batchEnabled.get()) {
+      HttpBatchEntry batchEntry = new HttpBatchEntry(point, database, retentionPolicy);
+      this.batchProcessor.put(batchEntry);
+      this.writeCount.incrementAndGet();
+      return CompletableFuture.completedFuture(null);
+    } else {
+      BatchPoints batchPoints = BatchPoints.database(database)
+                                           .retentionPolicy(retentionPolicy).build();
+      batchPoints.point(point);
+      return this.writeAsync(batchPoints).whenComplete((res, t) -> {
+        if (t == null) {
+          this.unBatchedCount.incrementAndGet();
+          this.writeCount.incrementAndGet();
+        }
+      });
+    }
+  }
+
+  @Override
+  public CompletionStage<Void> writeAsync(final BatchPoints batchPoints) {
+    this.batchedCount.addAndGet(batchPoints.getPoints().size());
+    RequestBody lineProtocol = RequestBody.create(MEDIA_TYPE_STRING, batchPoints.lineProtocol());
+    return executeAsync(this.influxDBService.writePoints(
+        this.username,
+        this.password,
+        batchPoints.getDatabase(),
+        batchPoints.getRetentionPolicy(),
+        TimeUtil.toTimePrecision(TimeUnit.NANOSECONDS),
+        batchPoints.getConsistency().value(),
+        lineProtocol))
+    .thenApply(res -> null);
+  }
+
+  @Override
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy,
+      final ConsistencyLevel consistency, final String records) {
+    return executeAsync(this.influxDBService.writePoints(
+        this.username,
+        this.password,
+        database,
+        retentionPolicy,
+        TimeUtil.toTimePrecision(TimeUnit.NANOSECONDS),
+        consistency.value(),
+        RequestBody.create(MEDIA_TYPE_STRING, records)))
+    .thenApply(res -> null);
+  }
+
+  @Override
+  public CompletionStage<Void> writeAsync(final String database, final String retentionPolicy,
+      final ConsistencyLevel consistency, final List<String> records) {
+    final String joinedRecords = Joiner.on("\n").join(records);
+    return writeAsync(database, retentionPolicy, consistency, joinedRecords);
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public CompletionStage<QueryResult> queryAsync(final Query query) {
+    Call<QueryResult> call;
+    if (query.requiresPost()) {
+      call = this.influxDBService.postQuery(this.username,
+                                            this.password, query.getDatabase(), query.getCommandWithUrlEncoded());
+    } else {
+      call = this.influxDBService.query(this.username,
+                                        this.password, query.getDatabase(), query.getCommandWithUrlEncoded());
+    }
+    return executeAsync(call);
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+    public CompletionStage<QueryResult> queryAsync(final Query query, final int chunkSize) {
+
+        if (version().startsWith("0.") || version().startsWith("1.0")) {
+            throw new RuntimeException("chunking not supported");
+        }
+
+        Call<ResponseBody> call = this.influxDBService.query(this.username, this.password,
+                query.getDatabase(), query.getCommandWithUrlEncoded(), chunkSize);
+
+        CompletableFuture<QueryResult> future = new CompletableFuture<>();
+        call.enqueue(new Callback<ResponseBody>() {
+            @Override
+            public void onResponse(final Call<ResponseBody> call, final Response<ResponseBody> response) {
+                try {
+                    if (response.isSuccessful()) {
+                        BufferedSource source = response.body().source();
+                        while (true) {
+                            QueryResult result = InfluxDBImpl.this.adapter.fromJson(source);
+                            if (result != null) {
+                                future.complete(result);
+                            }
+                        }
+                    }
+                    try (ResponseBody errorBody = response.errorBody()) {
+                      future.completeExceptionally(new RuntimeException(errorBody.string()));
+                    }
+                } catch (EOFException e) {
+                    // do nothing
+                } catch (IOException e) {
+                  future.completeExceptionally(new RuntimeException(e));
+                }
+
+                if (!future.isDone()) {
+                  future.complete(null);
+                }
+            }
+
+            @Override
+            public void onFailure(final Call<ResponseBody> call, final Throwable t) {
+              future.completeExceptionally(new RuntimeException(t));
+            }
+        });
+        return future;
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public CompletionStage<QueryResult> queryAsync(final Query query, final TimeUnit timeUnit) {
+    return executeAsync(this.influxDBService.query(this.username, this.password, query.getDatabase(),
+        TimeUtil.toTimePrecision(timeUnit), query.getCommandWithUrlEncoded()));
+  }
+
   /**
    * {@inheritDoc}
    */
@@ -456,6 +588,36 @@ public class InfluxDBImpl implements InfluxDB {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private <T> CompletionStage<T> executeAsync(final Call<T> call) {
+    CompletableFuture<T> future = new CompletableFuture<>();
+    call.enqueue(new Callback<T>() {
+      @Override
+      public void onFailure(final Call<T> call, final Throwable t) {
+        future.completeExceptionally(t);
+      }
+
+      @Override
+      public void onResponse(final Call<T> call, final Response<T> response) {
+        try {
+          if (response.isSuccessful()) {
+            future.complete(response.body());
+          } else {
+            try (ResponseBody errorBody = response.errorBody()) {
+              future.completeExceptionally(new RuntimeException(errorBody.string()));
+            }
+          }
+        } catch (IOException e) {
+          future.completeExceptionally(new RuntimeException(e));
+        }
+
+        if (!future.isDone()) {
+          future.complete(null);
+        }
+      }
+    });
+    return future;
   }
 
   /**

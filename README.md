@@ -77,6 +77,45 @@ influxDB.deleteDatabase(dbName);
 ```
 Note that the batching functionality creates an internal thread pool that needs to be shutdown explicitly as part of a gracefull application shut-down, or the application will not shut down properly. To do so simply call: ```influxDB.close()```
 
+For asynchronous requests, use queryAsync/writeAsync, which return a [```CompletionStage```](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CompletionStage.html):
+
+```java
+InfluxDB influxDB = InfluxDBFactory.connect("http://172.17.0.2:8086", "root", "root");
+String dbName = "aTimeSeries";
+influxDB.createDatabase(dbName);
+
+BatchPoints batchPoints = BatchPoints
+				.database(dbName)
+				.tag("async", "true")
+				.retentionPolicy("autogen")
+				.consistency(ConsistencyLevel.ALL)
+				.build();
+Point point1 = Point.measurement("cpu")
+					.time(System.currentTimeMillis(), TimeUnit.MILLISECONDS)
+					.addField("idle", 90L)
+					.addField("user", 9L)
+					.addField("system", 1L)
+					.build();
+Point point2 = Point.measurement("disk")
+					.time(System.currentTimeMillis(), TimeUnit.MILLISECONDS)
+					.addField("used", 80L)
+					.addField("free", 1L)
+					.build();
+batchPoints.point(point1);
+batchPoints.point(point2);
+influxDB.writeAsync(batchPoints).whenComplete((res, t) -> {
+    if(t != null) {
+        // handle exception
+    }
+    else {
+        Query query = new Query("SELECT idle FROM cpu", dbName);
+        influxDB.queryAsync(query).whenComplete((res, t) -> {
+            influxDB.deleteDatabase(dbName);
+        });
+    }
+});
+```
+
 ### Advanced Usages:
 
 #### Gzip's support (version 2.5+ required):
@@ -124,7 +163,7 @@ For version change history have a look at [ChangeLog](https://github.com/influxd
 
 ### Build Requirements
 
-* Java 1.7+
+* Java 1.8+
 * Maven 3.0+
 * Docker daemon running
 
